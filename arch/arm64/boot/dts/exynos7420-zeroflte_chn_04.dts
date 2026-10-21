@@ -28,6 +28,41 @@
 	model_info-hw_rev_end = <255>;
 	compatible = "samsung,ZERO-F LTE CHN EVT1 mPOP,r07", "samsung,exynos7420";
 
+	/* G9200 ERK2 rev07 battery policy overrides. */
+	battery {
+		battery,fast_charging_current = <2100 0 0 2100 460 1200 1000 460 1200 0 1200 1200 1200 1600 2100 0 0 400 700 1300 300 1000 1500 0 2550 1000 2550 80 1800 1000 1400 0 1000 2100>;
+
+		battery,temp_high_threshold_event = <700>;
+		battery,temp_high_recovery_event = <460>;
+		battery,temp_low_threshold_event = <(-30)>;
+		battery,temp_low_recovery_event = <0>;
+		battery,temp_high_threshold_normal = <600>;
+		battery,temp_high_recovery_normal = <460>;
+		battery,temp_low_threshold_normal = <(-50)>;
+		battery,temp_low_recovery_normal = <0>;
+		battery,temp_high_threshold_lpm = <600>;
+		battery,temp_high_recovery_lpm = <460>;
+		battery,temp_low_threshold_lpm = <(-50)>;
+		battery,temp_low_recovery_lpm = <0>;
+		battery,wpc_high_threshold_normal = <600>;
+		battery,wpc_high_recovery_normal = <460>;
+		battery,wpc_low_threshold_normal = <(-50)>;
+		battery,wpc_low_recovery_normal = <0>;
+
+		battery,wpc_high_temp = <420>;
+		battery,wpc_high_temp_recovery = <410>;
+
+		battery,swelling_high_temp_block = <500>;
+		battery,swelling_high_temp_recov = <450>;
+		battery,swelling_low_temp_block = <50>;
+		battery,swelling_low_temp_recov = <100>;
+		battery,swelling_chg_current = <1300>;
+		battery,swelling_drop_float_voltage = <4200>;
+		battery,swelling_high_rechg_voltage = <4150>;
+		battery,swelling_low_rechg_voltage = <4050>;
+		battery,swelling_wc_chg_current = <1300>;
+	};
+
 	spi_0: spi@14d20000 {
 		/delete-property/ dma-mode;
 		/delete-property/ dmas;
