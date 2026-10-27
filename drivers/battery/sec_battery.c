@@ -20,6 +20,11 @@ bool wpc_temp_mode = false;
 #endif
 bool slate_mode_state;
 
+#define CHARGE_CONTROL_START_DEFAULT	75
+#define CHARGE_CONTROL_END_DEFAULT	80
+#define BYPASS_MIN_CAPACITY		20
+#define BYPASS_RESUME_CAPACITY		15
+
 /**************************************************************/
 #ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
 #ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING_ZERO_ONLY
@@ -76,6 +81,14 @@ static struct device_attribute sec_battery_attrs[] = {
 	SEC_BATTERY_ATTR(hv_wc_charger_support),
 	SEC_BATTERY_ATTR(factory_mode),
 	SEC_BATTERY_ATTR(store_mode),
+	SEC_BATTERY_ATTR(charge_control_enabled),
+	SEC_BATTERY_ATTR(charge_control_start_threshold),
+	SEC_BATTERY_ATTR(charge_control_end_threshold),
+	SEC_BATTERY_ATTR(charge_control_active),
+	SEC_BATTERY_ATTR(bypass_charging),
+	SEC_BATTERY_ATTR(bypass_charging_active),
+	SEC_BATTERY_ATTR(charging_input_current_limit),
+	SEC_BATTERY_ATTR(charging_input_current_now),
 	SEC_BATTERY_ATTR(update),
 	SEC_BATTERY_ATTR(test_mode),
 
@@ -694,6 +707,96 @@ static void sec_bat_set_charging_status(struct sec_battery_info *battery,
 		break;
 	}
 	battery->status = status;
+}
+
+static bool sec_bat_has_external_power(struct sec_battery_info *battery)
+{
+	switch (battery->cable_type) {
+	case POWER_SUPPLY_TYPE_UNKNOWN:
+	case POWER_SUPPLY_TYPE_BATTERY:
+	case POWER_SUPPLY_TYPE_OTG:
+	case POWER_SUPPLY_TYPE_SMART_OTG:
+	case POWER_SUPPLY_TYPE_POWER_SHARING:
+	case POWER_SUPPLY_TYPE_HMT_CONNECTED:
+		return false;
+	default:
+		return true;
+	}
+}
+
+static void sec_bat_set_bypass_charging(struct sec_battery_info *battery,
+		bool enable)
+{
+	union power_supply_propval value;
+
+	if (battery->bypass_charging_active == enable)
+		return;
+
+	battery->bypass_charging_active = enable;
+	value.intval = !enable;
+	psy_do_property(battery->pdata->charger_name, set,
+		POWER_SUPPLY_PROP_CHARGING_ENABLED, value);
+
+	if (enable) {
+		battery->charging_start_time = 0;
+		battery->charging_passed_time = 0;
+		battery->charging_next_time = 0;
+		battery->charging_fullcharged_time = 0;
+		battery->full_check_cnt = 0;
+		battery->charging_block = true;
+		sec_bat_set_charging_status(battery,
+			POWER_SUPPLY_STATUS_NOT_CHARGING);
+	} else if (!sec_bat_has_external_power(battery)) {
+		battery->charging_block = false;
+		sec_bat_set_charging_status(battery,
+			POWER_SUPPLY_STATUS_DISCHARGING);
+	} else if (battery->health == POWER_SUPPLY_HEALTH_GOOD) {
+		sec_bat_set_charging_status(battery,
+			POWER_SUPPLY_STATUS_CHARGING);
+		sec_bat_set_charge(battery, true);
+	}
+
+	dev_info(battery->dev,
+		"%s: bypass=%d, cable=%d, capacity=%d, charge_limit=%d\n",
+		__func__, enable, battery->cable_type, battery->capacity,
+		battery->charge_control_active);
+}
+
+static void sec_bat_update_charge_control(struct sec_battery_info *battery)
+{
+	bool external_power = sec_bat_has_external_power(battery);
+	bool bypass = false;
+
+	if (!external_power) {
+		battery->charge_control_active = false;
+	} else if (battery->bypass_charging) {
+		battery->charge_control_active = false;
+		if (battery->bypass_charging_active)
+			bypass = battery->capacity > BYPASS_RESUME_CAPACITY;
+		else
+			bypass = battery->capacity >= BYPASS_MIN_CAPACITY;
+	} else if (battery->charge_control_enabled) {
+		if (battery->charge_control_active)
+			battery->charge_control_active =
+				battery->capacity >
+				battery->charge_control_start_threshold;
+		else
+			battery->charge_control_active =
+				battery->capacity >=
+				battery->charge_control_end_threshold;
+
+		bypass = battery->charge_control_active;
+	} else {
+		battery->charge_control_active = false;
+	}
+
+	sec_bat_set_bypass_charging(battery, bypass);
+	if (bypass) {
+		battery->charging_block = true;
+		if (battery->status != POWER_SUPPLY_STATUS_NOT_CHARGING)
+			sec_bat_set_charging_status(battery,
+				POWER_SUPPLY_STATUS_NOT_CHARGING);
+	}
 }
 
 static bool sec_bat_battery_cable_check(struct sec_battery_info *battery)
@@ -3433,6 +3536,7 @@ static void sec_bat_monitor_work(
 #endif
 
 continue_monitor:
+	sec_bat_update_charge_control(battery);
 #if defined(CONFIG_AFC_CHARGER_MODE)
 	dev_info(battery->dev,
 		 "%s: Status(%s), mode(%s), Health(%s), Cable(%d,%d), level(%d%%), HV(%s), Cycle(%d)\n",
@@ -3456,23 +3560,6 @@ continue_monitor:
 			"%s: battery->stability_test(%d), battery->eng_not_full_status(%d)\n",
 			__func__, battery->stability_test, battery->eng_not_full_status);
 #endif
-	if (battery->store_mode && !lpcharge && (battery->cable_type != POWER_SUPPLY_TYPE_BATTERY)) {
-
-		dev_info(battery->dev,
-			"%s: @battery->capacity = (%d), battery->status= (%d), battery->store_mode=(%d)\n",
-			__func__, battery->capacity, battery->status, battery->store_mode);
-
-		if ((battery->capacity >= STORE_MODE_CHARGING_MAX) && (battery->status == POWER_SUPPLY_STATUS_CHARGING)) {
-			sec_bat_set_charging_status(battery,
-					POWER_SUPPLY_STATUS_DISCHARGING);
-			sec_bat_set_charge(battery, false);
-		}
-		if ((battery->capacity <= STORE_MODE_CHARGING_MIN) && (battery->status == POWER_SUPPLY_STATUS_DISCHARGING)) {
-			sec_bat_set_charging_status(battery,
-					POWER_SUPPLY_STATUS_CHARGING);
-			sec_bat_set_charge(battery, true);
-		}
-	}
 	power_supply_changed(&battery->psy_bat);
 
 skip_monitor:
@@ -4021,7 +4108,41 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 		break;
 	case STORE_MODE:
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
-			battery->store_mode);
+			battery->charge_control_enabled);
+		break;
+	case CHARGE_CONTROL_ENABLED:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			battery->charge_control_enabled);
+		break;
+	case CHARGE_CONTROL_START_THRESHOLD:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%u\n",
+			battery->charge_control_start_threshold);
+		break;
+	case CHARGE_CONTROL_END_THRESHOLD:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%u\n",
+			battery->charge_control_end_threshold);
+		break;
+	case CHARGE_CONTROL_ACTIVE:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			battery->charge_control_active);
+		break;
+	case BYPASS_CHARGING:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			battery->bypass_charging);
+		break;
+	case BYPASS_CHARGING_ACTIVE:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			battery->bypass_charging_active);
+		break;
+	case CHARGING_INPUT_CURRENT_LIMIT:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			battery->current_max);
+		break;
+	case CHARGING_INPUT_CURRENT_NOW:
+		psy_do_property(battery->pdata->charger_name, get,
+			POWER_SUPPLY_PROP_CURRENT_NOW, value);
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			value.intval);
 		break;
 	case UPDATE:
 		break;
@@ -4771,23 +4892,65 @@ ssize_t sec_bat_store_attrs(
 		break;
 	case STORE_MODE:
 		if (sscanf(buf, "%d\n", &x) == 1) {
-			if (x) {
-				battery->store_mode = true;
-#if !defined(CONFIG_SEC_FACTORY)
-				if (battery->store_mode) {
-					if (battery->capacity <= 5) {
-						battery->ignore_store_mode = true;
-					} else {
-						union power_supply_propval value;
-						value.intval = battery->store_mode;
-						psy_do_property(battery->pdata->charger_name, set,
-								POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, value);
-					}
-				}
-#endif
-			}
+			if (x != 0 && x != 1)
+				return -EINVAL;
+			battery->charge_control_enabled = !!x;
+			wake_lock(&battery->monitor_wake_lock);
+			queue_delayed_work_on(0, battery->monitor_wqueue,
+				&battery->monitor_work, 0);
 			ret = count;
 		}
+		break;
+	case CHARGE_CONTROL_ENABLED:
+		if (sscanf(buf, "%d\n", &x) == 1) {
+			if (x != 0 && x != 1)
+				return -EINVAL;
+			battery->charge_control_enabled = !!x;
+			wake_lock(&battery->monitor_wake_lock);
+			queue_delayed_work_on(0, battery->monitor_wqueue,
+				&battery->monitor_work, 0);
+			ret = count;
+		}
+		break;
+	case CHARGE_CONTROL_START_THRESHOLD:
+		if (sscanf(buf, "%d\n", &x) == 1) {
+			if (x < 5 || x > 95 ||
+				x >= battery->charge_control_end_threshold)
+				return -EINVAL;
+			battery->charge_control_start_threshold = x;
+			wake_lock(&battery->monitor_wake_lock);
+			queue_delayed_work_on(0, battery->monitor_wqueue,
+				&battery->monitor_work, 0);
+			ret = count;
+		}
+		break;
+	case CHARGE_CONTROL_END_THRESHOLD:
+		if (sscanf(buf, "%d\n", &x) == 1) {
+			if (x < 10 || x > 100 ||
+				x <= battery->charge_control_start_threshold)
+				return -EINVAL;
+			battery->charge_control_end_threshold = x;
+			wake_lock(&battery->monitor_wake_lock);
+			queue_delayed_work_on(0, battery->monitor_wqueue,
+				&battery->monitor_work, 0);
+			ret = count;
+		}
+		break;
+	case BYPASS_CHARGING:
+		if (sscanf(buf, "%d\n", &x) == 1) {
+			if (x != 0 && x != 1)
+				return -EINVAL;
+			battery->bypass_charging = !!x;
+			wake_lock(&battery->monitor_wake_lock);
+			queue_delayed_work_on(0, battery->monitor_wqueue,
+				&battery->monitor_work, 0);
+			ret = count;
+		}
+		break;
+	case CHARGE_CONTROL_ACTIVE:
+	case BYPASS_CHARGING_ACTIVE:
+	case CHARGING_INPUT_CURRENT_LIMIT:
+	case CHARGING_INPUT_CURRENT_NOW:
 		break;
 	case UPDATE:
 		if (sscanf(buf, "%d\n", &x) == 1) {
@@ -7671,6 +7834,14 @@ static int __devinit sec_battery_probe(struct platform_device *pdev)
 	battery->factory_mode = false;
 	battery->store_mode = false;
 	battery->ignore_store_mode = false;
+	battery->charge_control_enabled = false;
+	battery->charge_control_active = false;
+	battery->bypass_charging = false;
+	battery->bypass_charging_active = false;
+	battery->charge_control_start_threshold =
+		CHARGE_CONTROL_START_DEFAULT;
+	battery->charge_control_end_threshold =
+		CHARGE_CONTROL_END_DEFAULT;
 	battery->slate_mode = false;
 	slate_mode_state = battery->slate_mode;
 	battery->is_hc_usb = false;

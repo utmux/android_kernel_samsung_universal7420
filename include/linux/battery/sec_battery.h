@@ -234,6 +234,12 @@ struct sec_battery_info {
 	bool factory_mode;
 	bool store_mode;
 	bool ignore_store_mode;
+	bool charge_control_enabled;
+	bool charge_control_active;
+	bool bypass_charging;
+	bool bypass_charging_active;
+	unsigned int charge_control_start_threshold;
+	unsigned int charge_control_end_threshold;
 	bool slate_mode;
 
 	/* MTBF test for CMCC */
@@ -363,6 +369,14 @@ enum {
 	HV_WC_CHARGER_SUPPORT,
 	FACTORY_MODE,
 	STORE_MODE,
+	CHARGE_CONTROL_ENABLED,
+	CHARGE_CONTROL_START_THRESHOLD,
+	CHARGE_CONTROL_END_THRESHOLD,
+	CHARGE_CONTROL_ACTIVE,
+	BYPASS_CHARGING,
+	BYPASS_CHARGING_ACTIVE,
+	CHARGING_INPUT_CURRENT_LIMIT,
+	CHARGING_INPUT_CURRENT_NOW,
 	UPDATE,
 	TEST_MODE,
 

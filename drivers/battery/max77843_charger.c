@@ -42,6 +42,7 @@ static enum power_supply_property max77843_charger_props[] = {
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_PRESENT,
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
+	POWER_SUPPLY_PROP_CHARGING_ENABLED,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_CURRENT_MAX,
@@ -1026,7 +1027,8 @@ static void max77843_charger_function_control(
 						    charger->cable_type].full_check_current_2nd);
 	}
 
-	max77843_set_charger_state(charger, charger->is_charging);
+	max77843_set_charger_state(charger,
+		charger->is_charging && charger->charging_enabled);
 
 #if defined(CONFIG_FIX_CHG_FQ_4MHZ)
 	max77843_update_reg(charger->i2c, MAX77843_CHG_REG_CNFG_01,
@@ -1227,7 +1229,7 @@ static int max77843_chg_get_property(struct power_supply *psy,
 		val->intval = max77843_get_charger_state(charger);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_TYPE:
-		if (!charger->is_charging)
+		if (!charger->is_charging || !charger->charging_enabled)
 			val->intval = POWER_SUPPLY_CHARGE_TYPE_NONE;
 		else if (charger->aicl_on)
 		{
@@ -1236,6 +1238,9 @@ static int max77843_chg_get_property(struct power_supply *psy,
 		}
 		else
 			val->intval = POWER_SUPPLY_CHARGE_TYPE_FAST;
+		break;
+	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
+		val->intval = charger->charging_enabled;
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		val->intval = max77843_get_charging_health(charger);
@@ -1325,6 +1330,13 @@ static int max77843_chg_set_property(struct power_supply *psy,
 	/* val->intval : type */
 	case POWER_SUPPLY_PROP_STATUS:
 		charger->status = val->intval;
+		break;
+	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
+		charger->charging_enabled = !!val->intval;
+		max77843_set_charger_state(charger,
+			charger->is_charging && charger->charging_enabled);
+		pr_info("%s: charging %s, keep buck/input path enabled\n",
+			__func__, charger->charging_enabled ? "enabled" : "bypassed");
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
 		/* check and unlock */
@@ -2276,6 +2288,7 @@ static int __devinit max77843_charger_probe(struct platform_device *pdev)
 	charger->afc_detect = false;
 	charger->is_mdock = false;
 	charger->store_mode = false;
+	charger->charging_enabled = true;
 	charger->siop_level = 100;
 	charger->charging_current_max = 500;
 	charger->max77843_pdata = pdata;

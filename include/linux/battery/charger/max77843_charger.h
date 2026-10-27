@@ -271,6 +271,7 @@ struct max77843_charger_data {
 	bool afc_detect;
 	bool is_mdock;
 	bool store_mode;
+	bool charging_enabled;
 
 	int pmic_ver;
 	int input_curr_limit_step;
