@@ -44,6 +44,20 @@ static const char *default_compressor = "lzo";
 /* Module params (documentation at end) */
 static unsigned int num_devices = 1;
 
+/*
+ * DEVICE_ATTR_{RO,RW,WO} were added after this 3.10 kernel.  Keep the
+ * backported zram driver self-contained instead of changing the driver-core
+ * API for the whole tree.
+ */
+#ifndef DEVICE_ATTR_RW
+#define DEVICE_ATTR_RW(_name) \
+	DEVICE_ATTR(_name, 0644, _name##_show, _name##_store)
+#define DEVICE_ATTR_RO(_name) \
+	DEVICE_ATTR(_name, 0444, _name##_show, NULL)
+#define DEVICE_ATTR_WO(_name) \
+	DEVICE_ATTR(_name, 0200, NULL, _name##_store)
+#endif
+
 static inline void deprecated_attr_warn(const char *name)
 {
 	pr_warn_once("%d (%s) Attribute %s (and others) will be removed. %s\n",
