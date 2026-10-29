@@ -238,6 +238,7 @@ struct sec_battery_info {
 	bool charge_control_active;
 	bool bypass_charging;
 	bool bypass_charging_active;
+	bool bypass_charging_lockout;
 	unsigned int charge_control_start_threshold;
 	unsigned int charge_control_end_threshold;
 	bool slate_mode;

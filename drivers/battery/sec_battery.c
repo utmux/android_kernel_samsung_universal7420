@@ -24,6 +24,7 @@ bool slate_mode_state;
 #define CHARGE_CONTROL_END_DEFAULT	80
 #define BYPASS_MIN_CAPACITY		20
 #define BYPASS_RESUME_CAPACITY		15
+#define BYPASS_MIN_INPUT_CURRENT		1000
 
 /**************************************************************/
 #ifdef CONFIG_BATTERY_SWELLING_SELF_DISCHARGING
@@ -765,16 +766,32 @@ static void sec_bat_set_bypass_charging(struct sec_battery_info *battery,
 static void sec_bat_update_charge_control(struct sec_battery_info *battery)
 {
 	bool external_power = sec_bat_has_external_power(battery);
+	bool sufficient_input =
+		battery->current_max >= BYPASS_MIN_INPUT_CURRENT;
 	bool bypass = false;
 
 	if (!external_power) {
 		battery->charge_control_active = false;
+		battery->bypass_charging_lockout = false;
 	} else if (battery->bypass_charging) {
 		battery->charge_control_active = false;
-		if (battery->bypass_charging_active)
-			bypass = battery->capacity > BYPASS_RESUME_CAPACITY;
-		else
-			bypass = battery->capacity >= BYPASS_MIN_CAPACITY;
+
+		if (!battery->bypass_charging_lockout &&
+			battery->capacity <= BYPASS_RESUME_CAPACITY) {
+			battery->bypass_charging_lockout = true;
+			dev_info(battery->dev,
+				"%s: low battery lockout, capacity=%d\n",
+				__func__, battery->capacity);
+		}
+
+		if (!battery->bypass_charging_lockout && sufficient_input) {
+			if (battery->bypass_charging_active)
+				bypass = battery->capacity >
+					BYPASS_RESUME_CAPACITY;
+			else
+				bypass = battery->capacity >=
+					BYPASS_MIN_CAPACITY;
+		}
 	} else if (battery->charge_control_enabled) {
 		if (battery->charge_control_active)
 			battery->charge_control_active =
@@ -4941,6 +4958,8 @@ ssize_t sec_bat_store_attrs(
 			if (x != 0 && x != 1)
 				return -EINVAL;
 			battery->bypass_charging = !!x;
+			if (!battery->bypass_charging)
+				battery->bypass_charging_lockout = false;
 			wake_lock(&battery->monitor_wake_lock);
 			queue_delayed_work_on(0, battery->monitor_wqueue,
 				&battery->monitor_work, 0);
@@ -7838,6 +7857,7 @@ static int __devinit sec_battery_probe(struct platform_device *pdev)
 	battery->charge_control_active = false;
 	battery->bypass_charging = false;
 	battery->bypass_charging_active = false;
+	battery->bypass_charging_lockout = false;
 	battery->charge_control_start_threshold =
 		CHARGE_CONTROL_START_DEFAULT;
 	battery->charge_control_end_threshold =
